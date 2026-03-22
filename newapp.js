@@ -156,8 +156,8 @@ const transporter = nodemailer.createTransport({
 // ==================== DATABASE POOL ====================
 const db = mysql.createPool({
     host: '127.0.0.1',
-    database: 'u166499615_realestate',
-    user: 'u166499615_ahmed',
+    database: 'u166499615_realestate2',
+    user: 'u166499615_ahmed2',
     password: 'Lateef.2008',
     port: 3306,
 });
