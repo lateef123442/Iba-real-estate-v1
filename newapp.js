@@ -148,8 +148,8 @@ passport.deserializeUser(async (id, done) => {
 const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
-        user: process.env.EMAIL_USER || 'goareghanconsulting@gmail.com',
-        pass: process.env.EMAIL_PASS || 'ldhn cvte bldt piij'
+        user: process.env.EMAIL_USER || 'ibarealestate2023@gmail.com',
+        pass: process.env.EMAIL_PASS || 'umsp tpyr bifq aosu'
     }
 });
 
