@@ -155,7 +155,7 @@ const transporter = nodemailer.createTransport({
 
 // ==================== DATABASE POOL ====================
 const db = mysql.createPool({
-    host: 77.37.35.122,
+    host:'srv2111.hstgr.io',
     database: 'u166499615_realestate2',
     user: 'u166499615_ahmed2',
     password: 'Lateef.2008',
