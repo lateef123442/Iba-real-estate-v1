@@ -1,4 +1,4 @@
-/ Step 1: Node modules export
+// Step 1: Node modules export
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
