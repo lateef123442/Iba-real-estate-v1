@@ -67,7 +67,7 @@ function normalizeImagePaths(paths) {
 // directory on Hostinger, where process.cwd() !== __dirname.
 // UPLOADS_BASE — hardcoded to persist across Git auto-deploys on Hostinger.
 // This path is OUTSIDE the app folder so it is never wiped on redeploy.
-const UPLOADS_BASE = '/home/u166499615/uploads';
+const UPLOADS_BASE = '/home/u166499615/uploads/iba-realestate';
 
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
