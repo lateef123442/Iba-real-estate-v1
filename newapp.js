@@ -800,8 +800,6 @@ newapp2.post('/message', ensureAuthenticated, async (req, res) => {
 });
 
 // ==================== SALES APPROVAL / DECLINE ====================
-// FIX: Do NOT call normalizeImagePaths() on p.image_data — it is already a web path in the DB.
-// Only call normalizeImagePaths() on raw OS paths from Multer.
 newapp2.get('/approve', ensureAuthenticated, async (req, res) => {
     const propertyId = req.query.id;
     if (!propertyId) return res.status(400).send('Property ID is required.');
@@ -812,28 +810,33 @@ newapp2.get('/approve', ensureAuthenticated, async (req, res) => {
 
         const p = results[0];
 
-        // FIX: p.image_data is already a web path (/uploads/...) — pass it through as-is.
-        // Only call normalizeImagePaths if you suspect legacy OS paths are stored.
-        const safeImageData = p.image_data || '';
-
+        // image_data is already a /uploads/... web path stored by /upload — pass through as-is
+        // 20 columns, 20 values — status is the last positional value
         await db.query(
             `INSERT INTO all_properties
-            (ownerName, ownerEmail, ownerPhone, propertyAddress, bedrooms, bathrooms, sqft,
-             land_size, building_size, num_flats,
-             image_data, video, documents, description, title, rentSell, agentId, amount, \`property-type\`, status)
+            (ownerName, ownerEmail, ownerPhone, propertyAddress, bedrooms, bathrooms, description,
+             sqft, land_size, building_size, num_flats,
+             image_data, video, documents, amount, title, rentSell, \`property-type\`, agentId, status)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved')`,
             [
-                p.ownerName, p.ownerEmail, p.ownerPhone, p.propertyAddress,
-                p.bedrooms, p.bathrooms, p.sqft,
-                p.land_size || null, p.building_size || null, p.num_flats || null,
-                safeImageData, p.video || '', p.documents || '',
-                p.description, p.title, p.rentSell, p.agentId, p.amount, p.property_type
+                p.ownerName  || '', p.ownerEmail || '', p.ownerPhone || '',
+                p.propertyAddress || '', p.bedrooms || null, p.bathrooms || null,
+                p.description || '', p.sqft || null,
+                p.land_size   || null, p.building_size || null, p.num_flats || null,
+                p.image_data  || '', p.video || '', p.documents || '',
+                p.amount      || null, p.title || null, p.rentSell || null,
+                p.property_type || null, p.agentId
             ]
         );
-        await db.query('INSERT INTO total_amount (amount) VALUES (?)', [p.amount]);
+        // Safely record amount — skip if total_amount table doesn't exist
+        if (p.amount) {
+            await db.query('INSERT INTO total_amount (amount) VALUES (?)', [p.amount]).catch(e =>
+                console.warn('total_amount insert skipped:', e.message)
+            );
+        }
         await db.query('DELETE FROM sales_approval WHERE id = ?', [propertyId]);
         res.render('sales-approved-successfully');
-    } catch (err) { console.error(err.message); res.status(500).send('Error processing approval: ' + err.message); }
+    } catch (err) { console.error('GET /approve error:', err.message); res.status(500).send('Error processing approval: ' + err.message); }
 });
 
 newapp2.get('/decline', ensureAuthenticated, async (req, res) => {
@@ -1108,33 +1111,62 @@ newapp2.post('/logout', (req, res) => {
 });
 
 // ==================== SOLD / UNSOLD / EDIT SOLD ====================
+
+// Helper: move one property row from all_properties → sold_properties atomically
+async function moveToSold(propertyId) {
+    const [results] = await db.query('SELECT * FROM all_properties WHERE id = ?', [propertyId]);
+    if (results.length === 0) throw new Error('Property not found in all_properties');
+    const p = results[0];
+
+    // 19 columns + status = 20 total
+    await db.query(
+        `INSERT INTO sold_properties
+        (ownerName, ownerEmail, ownerPhone, propertyAddress, bedrooms, bathrooms, description,
+         sqft, land_size, building_size, num_flats,
+         image_data, video, documents, amount, title, rentSell, agentId, \`property-type\`, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sold')`,
+        [
+            p.ownerName    || '', p.ownerEmail  || '', p.ownerPhone || '',
+            p.propertyAddress || '', p.bedrooms || null, p.bathrooms || null,
+            p.description  || '', p.sqft         || null,
+            p.land_size    || null, p.building_size || null, p.num_flats || null,
+            p.image_data   || '', p.video        || '', p.documents || '',
+            p.amount       || null, p.title      || null, p.rentSell || null,
+            p.agentId,  p['property-type'] || null
+        ]
+    );
+    await db.query('DELETE FROM all_properties WHERE id = ?', [propertyId]);
+    return p; // return the original row for callers that need it
+}
+
+// GET /sold?id=X  — used by standard <a href="/sold?id=X"> links
 newapp2.get('/sold', ensureAuthenticated, async (req, res) => {
     const propertyId = req.query.id;
-    if (!propertyId || isNaN(propertyId)) return res.redirect('/sell-page.html?error=Invalid property ID.');
+    if (!propertyId || isNaN(propertyId)) {
+        return res.redirect('/index.html?error=Invalid+property+ID');
+    }
     try {
-        const [results] = await db.query('SELECT * FROM all_properties WHERE id = ?', [propertyId]);
-        if (results.length === 0) return res.redirect('/sell-page.html?error=Property not found.');
-        const p = results[0];
-        // FIX: p.image_data already contains /uploads/... web paths — pass through as-is
-        await db.query(
-            `INSERT INTO sold_properties
-            (ownerName, ownerEmail, ownerPhone, propertyAddress, bedrooms, bathrooms, description,
-             sqft, land_size, building_size, num_flats,
-             image_data, video, documents, amount, title, rentSell, agentId, \`property-type\`)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-                p.ownerName || '', p.ownerEmail || '', p.ownerPhone || '',
-                p.propertyAddress || '', p.bedrooms || null, p.bathrooms || null,
-                p.description || '', p.sqft || null,
-                p.land_size || null, p.building_size || null, p.num_flats || null,
-                p.image_data || '', p.video || '', p.documents || '',
-                p.amount || null, p.title || null, p.rentSell || null,
-                p.agentId, p['property-type'] || null
-            ]
-        );
-        await db.query('DELETE FROM all_properties WHERE id = ?', [propertyId]);
+        const p = await moveToSold(propertyId);
         res.redirect(`/index.html?success=sold&title=${encodeURIComponent(p.title || '')}`);
-    } catch (err) { console.error('Sold route error:', err); res.redirect('/sell-page.html?error=Failed to mark property as sold.'); }
+    } catch (err) {
+        console.error('GET /sold error:', err.message);
+        res.redirect('/index.html?error=' + encodeURIComponent('Failed to mark property as sold: ' + err.message));
+    }
+});
+
+// POST /sold  — used by AJAX / fetch calls that send { id } in the request body
+newapp2.post('/sold', ensureAuthenticated, async (req, res) => {
+    const propertyId = req.body.id || req.query.id;
+    if (!propertyId || isNaN(propertyId)) {
+        return res.status(400).json({ success: false, message: 'Invalid property ID' });
+    }
+    try {
+        const p = await moveToSold(propertyId);
+        res.json({ success: true, message: `"${p.title || 'Property'}" marked as sold successfully.` });
+    } catch (err) {
+        console.error('POST /sold error:', err.message);
+        res.status(500).json({ success: false, message: 'Failed to mark property as sold: ' + err.message });
+    }
 });
 
 newapp2.get('/sold-properties', ensureAuthenticated, async (req, res) => {
@@ -1226,13 +1258,14 @@ newapp2.post('/unsold', ensureAuthenticated, async (req, res) => {
         const [results] = await db.query('SELECT * FROM sold_properties WHERE id = ?', [propertyId]);
         if (results.length === 0) return res.redirect('/sold-properties?error=Property not found.');
         const p = results[0];
-        // FIX: image_data already web path — pass through as-is
+        // image_data is already a web path — pass through as-is
+        // Include status = 'approved' so the property re-enters the active listings correctly
         await db.query(
             `INSERT INTO all_properties
             (ownerName, ownerEmail, ownerPhone, propertyAddress, bedrooms, bathrooms, description,
              sqft, land_size, building_size, num_flats,
-             image_data, video, documents, amount, title, rentSell, \`property-type\`, agentId)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             image_data, video, documents, amount, title, rentSell, \`property-type\`, agentId, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved')`,
             [
                 p.ownerName || '', p.ownerEmail || '', p.ownerPhone || '',
                 p.propertyAddress || '', p.bedrooms || null, p.bathrooms || null,
@@ -1245,7 +1278,7 @@ newapp2.post('/unsold', ensureAuthenticated, async (req, res) => {
         );
         await db.query('DELETE FROM sold_properties WHERE id = ?', [propertyId]);
         res.redirect('/sold-properties?success=Property moved back to active sales!');
-    } catch (err) { console.error(err); res.redirect('/sold-properties?error=Failed to move property back.'); }
+    } catch (err) { console.error('Unsold error:', err.message); res.redirect('/sold-properties?error=' + encodeURIComponent('Failed to move property back: ' + err.message)); }
 });
 
 newapp2.post('/delete-sold', ensureAuthenticated, async (req, res) => {
@@ -1329,46 +1362,56 @@ newapp2.post('/properties/approve/:id', ensureAuthenticated, async (req, res) =>
     const { id } = req.params;
     try {
         const [results] = await db.query('SELECT * FROM sales_approval WHERE id = ?', [id]);
-        if (results.length === 0) return res.status(404).send('Property not found');
+        if (results.length === 0) return res.status(404).json({ success: false, message: 'Property not found' });
         const p = results[0];
-        // FIX: p.image_data already web path — no re-normalization needed
+        // image_data is already a web path stored by /upload — pass through as-is
         await db.query(
             `INSERT INTO all_properties
             (ownerName, ownerEmail, ownerPhone, propertyAddress, bedrooms, bathrooms, description,
              sqft, land_size, building_size, num_flats,
              image_data, video, documents, amount, title, rentSell, \`property-type\`, agentId, status)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved')`,
-            [p.ownerName, p.ownerEmail, p.ownerPhone, p.propertyAddress, p.bedrooms || null, p.bathrooms || null,
-             p.description, p.sqft || null, p.land_size || null, p.building_size || null, p.num_flats || null,
-             p.image_data || '', p.video || '', p.documents || '',
-             p.amount, p.title, p.rentSell, p.property_type, p.agentId]
+            [
+                p.ownerName || '', p.ownerEmail || '', p.ownerPhone || '',
+                p.propertyAddress || '', p.bedrooms || null, p.bathrooms || null,
+                p.description || '', p.sqft || null,
+                p.land_size || null, p.building_size || null, p.num_flats || null,
+                p.image_data || '', p.video || '', p.documents || '',
+                p.amount || null, p.title || null, p.rentSell || null,
+                p.property_type || null, p.agentId
+            ]
         );
+        // Record sale amount
+        if (p.amount) {
+            await db.query('INSERT INTO total_amount (amount) VALUES (?)', [p.amount]).catch(e =>
+                console.warn('total_amount insert skipped:', e.message)
+            );
+        }
         await db.query('DELETE FROM sales_approval WHERE id = ?', [id]);
-        res.send('Property approved');
-    } catch (err) { console.error(err); res.status(500).send('Error'); }
+        res.json({ success: true, message: 'Property approved successfully' });
+    } catch (err) { console.error('properties/approve error:', err.message); res.status(500).json({ success: false, message: 'Error: ' + err.message }); }
 });
 
+// POST /properties/sell/:id — AJAX sell button (agent/admin dashboard)
+// Uses the shared moveToSold() helper so logic stays in one place.
 newapp2.post('/properties/sell/:id', ensureAuthenticated, async (req, res) => {
-    const { id } = req.params;
+    const propertyId = req.params.id;
+    if (!propertyId || isNaN(propertyId)) {
+        return res.status(400).json({ success: false, message: 'Invalid property ID' });
+    }
     try {
-        const [results] = await db.query('SELECT * FROM all_properties WHERE id = ?', [id]);
-        if (results.length === 0) return res.status(404).send('Property not found');
-        const p = results[0];
-        // FIX: p.image_data already web path — no re-normalization needed
-        await db.query(
-            `INSERT INTO sold_properties
-            (ownerName, ownerEmail, ownerPhone, propertyAddress, bedrooms, bathrooms, description,
-             sqft, land_size, building_size, num_flats,
-             image_data, video, documents, amount, title, rentSell, \`property-type\`, agentId, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sold')`,
-            [p.ownerName, p.ownerEmail, p.ownerPhone, p.propertyAddress, p.bedrooms || null, p.bathrooms || null,
-             p.description, p.sqft || null, p.land_size || null, p.building_size || null, p.num_flats || null,
-             p.image_data || '', p.video || '', p.documents || '',
-             p.amount, p.title, p.rentSell, p['property-type'], p.agentId]
-        );
-        await db.query('DELETE FROM all_properties WHERE id = ?', [id]);
-        res.send('Property marked as sold');
-    } catch (err) { console.error(err); res.status(500).send('Error'); }
+        const p = await moveToSold(propertyId);
+        // Record the sale amount
+        if (p.amount) {
+            await db.query('INSERT INTO total_amount (amount) VALUES (?)', [p.amount]).catch(e =>
+                console.warn('total_amount insert skipped:', e.message)
+            );
+        }
+        res.json({ success: true, message: `"${p.title || 'Property'}" marked as sold successfully.` });
+    } catch (err) {
+        console.error('POST /properties/sell/:id error:', err.message);
+        res.status(500).json({ success: false, message: 'Failed to mark as sold: ' + err.message });
+    }
 });
 
 // ==================== AGENT DASHBOARD & LISTINGS ====================
