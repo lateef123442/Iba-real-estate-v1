@@ -62,6 +62,19 @@ function normalizeImagePaths(paths) {
         .join(',');
 }
 
+// ==================== NORMALIZE ROWS FOR RENDER ====================
+// Call this on any array of property rows before passing to res.render()
+// Ensures image_data and video paths are always web-accessible URLs,
+// regardless of how they were originally stored in the DB.
+function normalizePropertyRows(rows) {
+    if (!rows) return [];
+    return rows.map(row => ({
+        ...row,
+        image_data: normalizeImagePaths(row.image_data || ''),
+        video:      normalizeImagePaths(row.video      || '')
+    }));
+}
+
 // ==================== MULTER CONFIG ====================
 // IMPORTANT: Use __dirname-based absolute paths so Multer saves to the correct
 // directory on Hostinger, where process.cwd() !== __dirname.
@@ -260,7 +273,7 @@ newapp2.get('/api/check-login', (req, res) => {
 newapp2.get('/', async (req, res) => {
     try {
         const [card] = await db.query("SELECT * FROM all_properties LIMIT 3");
-        res.render('website', { card });
+        res.render('website', { card: normalizePropertyRows(card) });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server error');
@@ -270,7 +283,7 @@ newapp2.get('/', async (req, res) => {
 newapp2.get('/website', async (req, res) => {
     try {
         const [card] = await db.query("SELECT * FROM all_properties LIMIT 3");
-        res.render('website', { card });
+        res.render('website', { card: normalizePropertyRows(card) });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server error');
@@ -414,7 +427,7 @@ newapp2.post('/dashboard', async (req, res) => {
             req.session.isAgent = false;
             try {
                 const [card] = await db.query("SELECT * FROM all_properties LIMIT 3");
-                return res.render('website', { card });
+                return res.render('website', { card: normalizePropertyRows(card) });
             } catch (cardErr) {
                 console.error(cardErr.message);
                 return res.status(500).send('Server error');
@@ -439,7 +452,7 @@ newapp2.get('/index.html', ensureAuthenticated, async (req, res) => {
     const isAdmin = isAdminEmail(req.user.email);
     try {
         const [card] = await db.query("SELECT * FROM all_properties");
-        res.render('index', { card, isAdmin });
+        res.render('index', { card: normalizePropertyRows(card), isAdmin });
     } catch (err) { console.error(err.message); res.status(500).send('Server error'); }
 });
 
@@ -448,7 +461,7 @@ newapp2.get('/buy-page.html', ensureAuthenticated, async (req, res) => {
     const isAdmin = isAdminEmail(req.user.email);
     try {
         const [card] = await db.query("SELECT * FROM all_properties WHERE LOWER(rentSell) = 'sell'");
-        res.render('buy-page', { card, isAdmin });
+        res.render('buy-page', { card: normalizePropertyRows(card), isAdmin });
     } catch (err) { console.error(err.message); res.status(500).send('Server error'); }
 });
 
@@ -462,7 +475,7 @@ newapp2.get('/sell-page.html', ensureAuthenticated, async (req, res) => {
     const isAdmin = isAdminEmail(req.user.email);
     try {
         const [card] = await db.query("SELECT * FROM all_properties");
-        res.render('sell-page', { card, isAdmin });
+        res.render('sell-page', { card: normalizePropertyRows(card), isAdmin });
     } catch (err) { console.error(err.message); res.status(500).send('Server error'); }
 });
 
@@ -471,7 +484,7 @@ newapp2.get('/rent-page.html', ensureAuthenticated, async (req, res) => {
     const isAdmin = isAdminEmail(req.user.email);
     try {
         const [card] = await db.query("SELECT * FROM all_properties WHERE LOWER(rentSell) = 'rent'");
-        res.render('rent-page', { card, isAdmin });
+        res.render('rent-page', { card: normalizePropertyRows(card), isAdmin });
     } catch (err) { console.error(err.message); res.status(500).send('Server error'); }
 });
 
@@ -490,7 +503,7 @@ newapp2.get('/sales-approval.html', ensureAuthenticated, async (req, res) => {
     const isAdmin = isAdminEmail(req.user.email);
     try {
         const [card] = await db.query("SELECT * FROM sales_approval");
-        res.render('sales-approval', { card, isAdmin });
+        res.render('sales-approval', { card: normalizePropertyRows(card), isAdmin });
     } catch (err) { console.error(err.message); res.status(500).send('Server error'); }
 });
 
@@ -569,11 +582,6 @@ newapp2.get('/track-sales.html', ensureAuthenticated, async (req, res) => {
 newapp2.get('/register.html', (req, res) => res.render('signin-page'));
 
 // ==================== PROPERTY UPLOAD ====================
-// NEW fields: land_size, building_size, num_flats — all optional
-// SQL required (run alter_tables.sql):
-//   ALTER TABLE sales_approval ADD COLUMN IF NOT EXISTS land_size VARCHAR(100) NULL ...
-//   ALTER TABLE all_properties  ADD COLUMN IF NOT EXISTS land_size VARCHAR(100) NULL ...
-//   ALTER TABLE sold_properties ADD COLUMN IF NOT EXISTS land_size VARCHAR(100) NULL ...
 newapp2.post('/upload', (req, res, next) => {
     upload.fields([
         { name: 'image',     maxCount: 10 },
@@ -601,7 +609,6 @@ newapp2.post('/upload', (req, res, next) => {
             ownerName, ownerEmail, ownerPhone, propertyAddress,
             bedrooms, bathrooms, sqft, description, title,
             rentSell, amount, property_type,
-            // NEW fields
             land_size, building_size, num_flats
         } = req.body;
 
@@ -667,7 +674,7 @@ newapp2.get('/sales-completed', async (req, res) => {
     const isAdmin = isAdminEmail(req.user.email);
     try {
         const [card] = await db.query("SELECT * FROM all_properties");
-        res.render('sell-page', { card, isAdmin });
+        res.render('sell-page', { card: normalizePropertyRows(card), isAdmin });
     } catch (err) { console.error(err.message); res.status(500).send('Server error'); }
 });
 
@@ -682,7 +689,7 @@ newapp2.get('/request-tour', ensureAuthenticated, async (req, res) => {
     try {
         const [card] = await db.query("SELECT * FROM all_properties WHERE id = ?", [propertyId]);
         if (card.length === 0) return res.status(404).send('No property found with that ID.');
-        res.render('request-tour', { property: card[0], isAdmin, userId: req.user.id, userEmail: req.user.email });
+        res.render('request-tour', { property: normalizePropertyRows(card)[0], isAdmin, userId: req.user.id, userEmail: req.user.email });
     } catch (err) { console.error(err.message); res.status(500).send('Server error'); }
 });
 
@@ -693,7 +700,7 @@ newapp2.get('/view', ensureAuthenticated, async (req, res) => {
     try {
         const [card] = await db.query("SELECT * FROM sales_approval WHERE id = ?", [propertyId]);
         if (card.length === 0) return res.status(404).send('No property found with that ID.');
-        res.render('request-tour', { property: card[0], isAdmin, userId: req.user.id, userEmail: req.user.email });
+        res.render('request-tour', { property: normalizePropertyRows(card)[0], isAdmin, userId: req.user.id, userEmail: req.user.email });
     } catch (err) { console.error(err.message); res.status(500).send('Server error'); }
 });
 
@@ -709,7 +716,7 @@ newapp2.get('/tour-submitted', ensureAuthenticated, async (req, res) => {
     const isAdmin = isAdminEmail(req.user.email);
     try {
         const [card] = await db.query("SELECT * FROM all_properties");
-        res.render('index', { card, isAdmin, userId: req.user.id, userEmail: req.user.email });
+        res.render('index', { card: normalizePropertyRows(card), isAdmin, userId: req.user.id, userEmail: req.user.email });
     } catch (err) { console.error(err.message); res.status(500).send('Server error'); }
 });
 
@@ -886,7 +893,7 @@ newapp2.get('/search', ensureAuthenticated, async (req, res) => {
     if (min_baths)  { sql += " AND bathrooms >= ?"; values.push(min_baths); }
     try {
         const [card] = await db.query(sql, values);
-        res.render('index', { card, isAdmin });
+        res.render('index', { card: normalizePropertyRows(card), isAdmin });
     } catch (err) { console.error(err.message); res.status(500).send('Server error'); }
 });
 
@@ -903,7 +910,7 @@ newapp2.get('/buy-search-form', ensureAuthenticated, async (req, res) => {
     if (min_baths && !isNaN(min_baths))  { query += " AND bathrooms >= ?"; queryParams.push(parseInt(min_baths)); }
     try {
         const [card] = await db.query(query, queryParams);
-        res.render('buy-page', { card, isAdmin });
+        res.render('buy-page', { card: normalizePropertyRows(card), isAdmin });
     } catch (err) { console.error(err.message); res.status(500).send('Server error'); }
 });
 
@@ -914,7 +921,7 @@ newapp2.get('/customer-buy-page.html', async (req, res) => {
     if (req.query.property_type && req.query.property_type !== 'all') { query += " AND `property-type` = ?"; params.push(req.query.property_type); }
     try {
         const [card] = await db.query(query, params);
-        res.render('customer-buy-page', { card });
+        res.render('customer-buy-page', { card: normalizePropertyRows(card) });
     } catch (err) { console.error(err.message); res.status(500).send('Server error.'); }
 });
 
@@ -924,7 +931,7 @@ newapp2.get('/costumer-sell-page.html', async (req, res) => {
     if (req.query.property_type && req.query.property_type !== 'all') { query += " AND `property-type` = ?"; params.push(req.query.property_type); }
     try {
         const [card] = await db.query(query, params);
-        res.render('costumer-sell-page', { card });
+        res.render('costumer-sell-page', { card: normalizePropertyRows(card) });
     } catch (err) { console.error(err.message); res.status(500).send('Server error.'); }
 });
 
@@ -934,7 +941,7 @@ newapp2.get('/customer-rent-page.html', async (req, res) => {
     if (req.query.property_type && req.query.property_type !== 'all') { query += " AND `property-type` = ?"; params.push(req.query.property_type); }
     try {
         const [card] = await db.query(query, params);
-        res.render('customer-rent-page', { card });
+        res.render('customer-rent-page', { card: normalizePropertyRows(card) });
     } catch (err) { console.error(err.message); res.status(500).send('Server error.'); }
 });
 
@@ -949,7 +956,7 @@ newapp2.get('/property-detail', ensureAuthenticated, async (req, res) => {
         let [propResults] = await db.query("SELECT * FROM all_properties WHERE id = ?", [propertyId]);
         if (propResults.length === 0) [propResults] = await db.query("SELECT * FROM sold_properties WHERE id = ?", [propertyId]);
         if (propResults.length === 0) return res.status(404).send('No property found with that ID.');
-        const property = propResults[0];
+        const property = normalizePropertyRows(propResults)[0];
         let agent = null;
         if (property.agentId) {
             const [agentResults] = await db.query("SELECT * FROM signin WHERE id = ? AND role = 'agent'", [property.agentId]);
@@ -989,10 +996,9 @@ newapp2.post('/detail-contact', ensureAuthenticated, async (req, res) => {
         if (propResults.length === 0) return res.status(404).json({ success: false, message: 'Property not found' });
 
         const agentId = propResults[0].agentId;
-        let recipientEmail = 'goareghanconsulting@gmail.com'; // default recipient
+        let recipientEmail = 'goareghanconsulting@gmail.com';
         let receiverId = null;
 
-        // 1. Try to find the property's agent
         if (agentId) {
             const [agentResults] = await db.query("SELECT id, email FROM signin WHERE id = ? AND role = 'agent'", [agentId]);
             if (agentResults.length > 0 && agentResults[0].email) {
@@ -1001,7 +1007,6 @@ newapp2.post('/detail-contact', ensureAuthenticated, async (req, res) => {
             }
         }
 
-        // 2. No agent — find any registered admin from ADMIN_EMAILS to use as chat receiver
         if (!receiverId) {
             for (const adminEmail of ADMIN_EMAILS) {
                 const [adminRows] = await db.query("SELECT id FROM signin WHERE email = ? LIMIT 1", [adminEmail]);
@@ -1012,7 +1017,6 @@ newapp2.post('/detail-contact', ensureAuthenticated, async (req, res) => {
             }
         }
 
-        // 3. Send email — always CC goareghanconsulting@gmail.com
         try {
             await transporter.sendMail({
                 from: `"iba Real Estate Firm & Consultant" <${process.env.EMAIL_USER || 'goareghanconsulting@gmail.com'}>`,
@@ -1028,10 +1032,8 @@ newapp2.post('/detail-contact', ensureAuthenticated, async (req, res) => {
             });
         } catch (mailErr) {
             console.error('detail-contact email error:', mailErr.message);
-            // Don't block the response — still save chat
         }
 
-        // 4. Save to chat if we have a valid receiver
         if (receiverId) {
             try {
                 await db.query(
@@ -1102,7 +1104,7 @@ newapp2.get('/sold', ensureAuthenticated, async (req, res) => {
 newapp2.get('/sold-properties', ensureAuthenticated, async (req, res) => {
     try {
         const [results] = await db.query('SELECT * FROM sold_properties ORDER BY id DESC');
-        res.render('sold-properties', { soldProperties: results, isAdmin: true });
+        res.render('sold-properties', { soldProperties: normalizePropertyRows(results), isAdmin: true });
     } catch (err) { console.error(err); res.redirect('/sold-properties?error=Failed to load sold properties.'); }
 });
 
@@ -1112,7 +1114,7 @@ newapp2.get('/edit-sold', ensureAuthenticated, async (req, res) => {
     try {
         const [results] = await db.query('SELECT * FROM sold_properties WHERE id = ?', [propertyId]);
         if (results.length === 0) return res.redirect('/sold-properties?error=Property not found.');
-        res.render('edit-sold', { property: results[0], isAdmin: true });
+        res.render('edit-sold', { property: normalizePropertyRows(results)[0], isAdmin: true });
     } catch (err) { console.error(err); res.redirect('/login'); }
 });
 
@@ -1145,7 +1147,6 @@ newapp2.post('/update-sold', ensureAuthenticated, (req, res, next) => {
         property_type:   req.body['property-type'] || null
     };
 
-    // Merge kept existing paths with any newly uploaded files
     const keepImages = req.body.keep_images
         ? req.body.keep_images.split(',').map(s => s.trim()).filter(Boolean)
         : [];
@@ -1424,22 +1425,21 @@ newapp2.get('/edit-property/:id', ensureAuthenticated, async (req, res) => {
     try {
         let pending, approved, sold;
         if (userIsAdmin) {
-            // Admin can edit any property
             [[pending], [approved], [sold]] = await Promise.all([
                 db.query(`SELECT *, 'pending' AS tableName FROM sales_approval WHERE id = ?`, [propertyId]),
                 db.query(`SELECT *, 'approved' AS tableName FROM all_properties WHERE id = ?`, [propertyId]),
                 db.query(`SELECT *, 'sold' AS tableName FROM sold_properties WHERE id = ?`, [propertyId])
             ]);
         } else {
-            // Agent can only edit their own
             [[pending], [approved], [sold]] = await Promise.all([
                 db.query(`SELECT *, 'pending' AS tableName FROM sales_approval WHERE id = ? AND agentId = ?`, [propertyId, agentId]),
                 db.query(`SELECT *, 'approved' AS tableName FROM all_properties WHERE id = ? AND agentId = ?`, [propertyId, agentId]),
                 db.query(`SELECT *, 'sold' AS tableName FROM sold_properties WHERE id = ? AND agentId = ?`, [propertyId, agentId])
             ]);
         }
-        const property = [...pending, ...approved, ...sold][0];
-        if (!property) return res.status(404).json({ error: 'Property not found' });
+        const allRows = [...pending, ...approved, ...sold];
+        if (allRows.length === 0) return res.status(404).json({ error: 'Property not found' });
+        const property = normalizePropertyRows(allRows)[0];
         res.json(property);
     } catch (err) { console.error(err); res.status(500).json({ error: 'Database error' }); }
 });
@@ -1460,7 +1460,6 @@ newapp2.post('/update-property/:id', ensureAuthenticated, (req, res, next) => {
             bedrooms, bathrooms, land_size, building_size, num_flats,
             keep_images, keep_videos } = req.body;
     try {
-        // Find which table the property is in
         let findResults;
         if (userIsAdmin) {
             [findResults] = await db.query(`
@@ -1483,8 +1482,6 @@ newapp2.post('/update-property/:id', ensureAuthenticated, (req, res, next) => {
         else if (tableName === 'approved') { table = 'all_properties';  propertyTypeColumn = '`property-type`'; }
         else                               { table = 'sold_properties'; propertyTypeColumn = '`property-type`'; }
 
-        // --- Handle images ---
-        // keep_images: comma-sep list of existing image paths to retain
         const existingImages = keep_images
             ? keep_images.split(',').map(s => s.trim()).filter(Boolean)
             : [];
@@ -1492,7 +1489,6 @@ newapp2.post('/update-property/:id', ensureAuthenticated, (req, res, next) => {
         const newImagePaths = newImageFiles.map(f => normalizeImagePaths(f.path));
         const allImages = [...existingImages, ...newImagePaths].join(',');
 
-        // --- Handle videos ---
         const existingVideos = keep_videos
             ? keep_videos.split(',').map(s => s.trim()).filter(Boolean)
             : [];
@@ -1500,10 +1496,7 @@ newapp2.post('/update-property/:id', ensureAuthenticated, (req, res, next) => {
         const newVideoPaths = newVideoFiles.map(f => normalizeImagePaths(f.path));
         const allVideos = [...existingVideos, ...newVideoPaths].join(',');
 
-        // Build update query — include images/videos only if they changed
-        const whereClause = userIsAdmin
-            ? `WHERE id = ?`
-            : `WHERE id = ? AND agentId = ?`;
+        const whereClause = userIsAdmin ? `WHERE id = ?` : `WHERE id = ? AND agentId = ?`;
         const whereParams = userIsAdmin ? [propertyId] : [propertyId, agentId];
 
         await db.query(
@@ -1571,7 +1564,6 @@ newapp2.get('/chat', ensureAuthenticated, async (req, res) => {
             );
             res.render('chat', { messages, userId, receiverId, success: successMessage, receiverName, isAgent, chatList: null });
         } else {
-            // Get distinct conversation partners + last message via simple JOIN
             const [partnerRows] = await db.query(`
                 SELECT DISTINCT
                     CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END AS receiverId
@@ -1647,7 +1639,6 @@ newapp2.get('/agent-chat', ensureAuthenticated, async (req, res) => {
             );
             res.render('agent-chat', { messages, userId, receiverId, receiverName, isClient, chatList: null });
         } else {
-            // Step 1: get distinct partner IDs (sent OR received)
             const [partnerRows] = await db.query(`
                 SELECT DISTINCT
                     CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END AS partnerId
@@ -1655,7 +1646,6 @@ newapp2.get('/agent-chat', ensureAuthenticated, async (req, res) => {
                 WHERE sender_id = ? OR receiver_id = ?
             `, [userId, userId, userId]);
 
-            // Step 2: fetch user info + last message per partner in JS
             const processedChatList = (await Promise.all(partnerRows.map(async (row) => {
                 const partnerId = row.partnerId;
                 const [[uRows], [msgRows]] = await Promise.all([
@@ -1691,8 +1681,6 @@ newapp2.post('/agent-chat/send', ensureAuthenticated, async (req, res) => {
 
 
 // ==================== ADMIN CHAT ROUTES ====================
-
-// GET /admin-chat — main page: loads all threads + admin's own chats
 newapp2.get('/admin-chat', ensureAuthenticated, async (req, res) => {
     if (!req.user) return res.redirect('/login');
     const adminId = req.user.id;
@@ -1703,8 +1691,6 @@ newapp2.get('/admin-chat', ensureAuthenticated, async (req, res) => {
     let allUsers   = [];
 
     try {
-        // ── 1. All unique pairs (excluding admin) ──────────────────────────
-        // Use MAX(timestamp) only — no reliance on 'id' column name
         const [pairRows] = await db.query(`
             SELECT
                 LEAST(sender_id, receiver_id)    AS user1Id,
@@ -1751,8 +1737,6 @@ newapp2.get('/admin-chat', ensureAuthenticated, async (req, res) => {
     }
 
     try {
-        // ── 2. Admin's own conversations ──────────────────────────────────
-        // Step A: get distinct partner IDs
         const [partnerRows] = await db.query(`
             SELECT DISTINCT
                 CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END AS partnerId
@@ -1760,7 +1744,6 @@ newapp2.get('/admin-chat', ensureAuthenticated, async (req, res) => {
             WHERE sender_id = ? OR receiver_id = ?
         `, [adminId, adminId, adminId]);
 
-        // Step B: for each partner fetch user info + last message
         myChats = await Promise.all(partnerRows.map(async (row) => {
             try {
                 const partnerId = row.partnerId;
@@ -1792,11 +1775,9 @@ newapp2.get('/admin-chat', ensureAuthenticated, async (req, res) => {
 
     } catch (err) {
         console.error('Admin chat – myChats query error:', err.message);
-        // continue with empty myChats
     }
 
     try {
-        // ── 3. All users for the new-chat modal ───────────────────────────
         const [rows] = await db.query(
             "SELECT id, firstName, lastName, email, role FROM signin WHERE role IN ('agent','user') AND id != ? ORDER BY role, firstName",
             [adminId]
@@ -1806,7 +1787,6 @@ newapp2.get('/admin-chat', ensureAuthenticated, async (req, res) => {
         console.error('Admin chat – allUsers query error:', err.message);
     }
 
-    // Always render — never 500 the whole page
     res.render('admin-chat', {
         adminId,
         adminName,
@@ -1817,7 +1797,6 @@ newapp2.get('/admin-chat', ensureAuthenticated, async (req, res) => {
     });
 });
 
-// GET /admin-chat/thread — fetch messages between any two users
 newapp2.get('/admin-chat/thread', ensureAuthenticated, async (req, res) => {
     if (!isAdminEmail(req.user.email)) return res.status(403).json({ error: 'Forbidden' });
     const { user1, user2 } = req.query;
@@ -1831,7 +1810,6 @@ newapp2.get('/admin-chat/thread', ensureAuthenticated, async (req, res) => {
     } catch (err) { console.error(err); res.status(500).json({ error: 'DB error' }); }
 });
 
-// GET /admin-chat/private — fetch admin's private messages with a specific user
 newapp2.get('/admin-chat/private', ensureAuthenticated, async (req, res) => {
     if (!isAdminEmail(req.user.email)) return res.status(403).json({ error: 'Forbidden' });
     const adminId = req.user.id;
@@ -1846,7 +1824,6 @@ newapp2.get('/admin-chat/private', ensureAuthenticated, async (req, res) => {
     } catch (err) { console.error(err); res.status(500).json({ error: 'DB error' }); }
 });
 
-// POST /admin-chat/send — admin sends a private message to any user
 newapp2.post('/admin-chat/send', ensureAuthenticated, async (req, res) => {
     if (!isAdminEmail(req.user.email)) return res.status(403).json({ error: 'Forbidden' });
     const adminId = req.user.id;
@@ -1857,13 +1834,11 @@ newapp2.post('/admin-chat/send', ensureAuthenticated, async (req, res) => {
             'INSERT INTO chat_messages (sender_id, receiver_id, message, timestamp) VALUES (?, ?, ?, NOW())',
             [adminId, receiverId, message]
         );
-        // Real-time: emit to receiver via socket
         io.to(String(receiverId)).emit('receiveMessage', { message, senderId: adminId, timestamp: new Date() });
         res.json({ success: true, messageId: result.insertId });
     } catch (err) { console.error(err); res.status(500).json({ error: 'DB error' }); }
 });
 
-// GET /admin-chat/users — all agents + customers (for new chat modal refresh)
 newapp2.get('/admin-chat/users', ensureAuthenticated, async (req, res) => {
     if (!isAdminEmail(req.user.email)) return res.status(403).json({ error: 'Forbidden' });
     try {
@@ -1909,16 +1884,12 @@ newapp2.post('/valuate', ensureAuthenticated, async (req, res) => {
 });
 
 // ==================== REQUEST PROPERTY EVALUATION ====================
-// POST /request-evaluation — anyone can submit a property evaluation request
-// Accepts both plain field names (name, phone, ...) AND the val_ prefixed names
-// from the website homepage form (val_name, val_phone, val_address, val_type, val_purpose)
 newapp2.post('/request-evaluation', async (req, res) => {
     const b = req.body;
 
-    // Support both naming conventions from different forms
     const name            = b.name            || b.val_name    || '';
     const phone           = b.phone           || b.val_phone   || '';
-    const email           = b.email           || b.val_email   || ''; // optional
+    const email           = b.email           || b.val_email   || '';
     const propertyAddress = b.propertyAddress || b.val_address || '';
     const propertyType    = b.propertyType    || b.val_type    || '';
     const purpose         = b.purpose         || b.val_purpose || '';
@@ -1928,19 +1899,16 @@ newapp2.post('/request-evaluation', async (req, res) => {
     const bathrooms       = b.bathrooms       || '';
     const additionalInfo  = b.additionalInfo  || '';
 
-    // Only name, phone and address are required — email is optional
     if (!name || !phone || !propertyAddress) {
         return res.status(400).json({ success: false, message: 'Name, phone and property address are required.' });
     }
 
-    // Validate email only if one was provided
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (email && !emailRegex.test(email)) {
         return res.status(400).json({ success: false, message: 'Please enter a valid email address.' });
     }
 
     try {
-        // Save to DB (gracefully skips if table issues)
         try {
             await db.query(`
                 CREATE TABLE IF NOT EXISTS evaluation_requests (
@@ -1974,7 +1942,6 @@ newapp2.post('/request-evaluation', async (req, res) => {
             console.warn('Could not save evaluation request to DB:', dbErr.message);
         }
 
-        // Send email to admins
         await transporter.sendMail({
             from: `"iba Real Estate Firm & Consultant" <${process.env.EMAIL_USER || 'goareghanconsulting@gmail.com'}>`,
             to: ADMIN_EMAILS.join(','),
@@ -2011,7 +1978,6 @@ newapp2.post('/request-evaluation', async (req, res) => {
             `
         });
 
-        // Send confirmation email to requester only if they provided one
         if (email) {
             try {
                 await transporter.sendMail({
@@ -2040,7 +2006,6 @@ newapp2.post('/request-evaluation', async (req, res) => {
     }
 });
 
-// GET /request-evaluation — render the evaluation request page (no login required)
 newapp2.get('/request-evaluation', (req, res) => {
     const isAdmin = req.user ? isAdminEmail(req.user.email) : false;
     res.render('request-evaluation', { isAdmin });
@@ -2049,14 +2014,24 @@ newapp2.get('/request-evaluation', (req, res) => {
 newapp2.get('/gallery', async (req, res) => {
     try {
         const [card] = await db.query("SELECT * FROM all_properties ORDER BY id DESC");
-        res.render('gallery', { card });
+        res.render('gallery', { card: normalizePropertyRows(card) });
     } catch (err) { console.error(err); res.status(500).send('Server error'); }
+});
+
+// ==================== 404 HANDLER ====================
+newapp2.use((req, res) => {
+    res.status(404).send('Page not found');
+});
+
+// ==================== GLOBAL ERROR HANDLER ====================
+newapp2.use((err, req, res, next) => {
+    console.error('Unhandled error:', err);
+    res.status(500).send('Internal server error');
 });
 
 // ==================== START SERVER ====================
 const PORT = process.env.PORT || 3000;
 
-// Debug: log paths on startup so you can verify Hostinger config
 console.log('📁 __dirname     :', __dirname);
 console.log('📁 process.cwd() :', process.cwd());
 console.log('📁 UPLOADS_BASE  :', UPLOADS_BASE);
