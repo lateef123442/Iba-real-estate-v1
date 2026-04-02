@@ -35,53 +35,74 @@ function isAdminEmail(email) {
     return ADMIN_EMAILS.includes(email);
 }
 
-// ==================== IMAGE PATH HELPER ====================
-// Converts any stored path to a web-accessible URL.
-// Handles all formats Hostinger/Multer may produce:
-//   (a) relative:  "uploads/images/xxx.jpg"          → "/uploads/images/xxx.jpg"
-//   (b) absolute:  "/home/u.../uploads/images/xxx.jpg" → "/uploads/images/xxx.jpg"
-//   (c) correct:   "/uploads/images/xxx.jpg"          → "/uploads/images/xxx.jpg"
-//   (d) URL:       "https://..."                      → unchanged
+// ==================== UPLOADS BASE PATH ====================
+// Hardcoded absolute path outside the app folder so it persists across Git deploys.
+const UPLOADS_BASE = '/home/u166499615/uploads/iba-realestate';
+
+// ==================== IMAGE PATH HELPERS ====================
+
+/**
+ * normalizeToWebPath()
+ * Converts a raw Multer OS path (or any stored path) to a clean web URL.
+ * Should be called ONCE when saving to the database — never on data read back from DB.
+ *
+ * Input examples:
+ *   /home/u166499615/uploads/iba-realestate/images/123_photo.jpg  → /uploads/images/123_photo.jpg
+ *   /uploads/images/123_photo.jpg                                  → /uploads/images/123_photo.jpg  (already correct)
+ *   https://example.com/img.jpg                                    → https://example.com/img.jpg   (left alone)
+ */
+function normalizeToWebPath(p) {
+    if (!p) return '';
+    p = p.trim();
+    if (!p) return '';
+
+    // External URLs and data URIs — leave untouched
+    if (p.startsWith('http://') || p.startsWith('https://') || p.startsWith('data:')) {
+        return p;
+    }
+
+    // Strip UPLOADS_BASE prefix and replace with /uploads web prefix
+    // e.g. /home/u166499615/uploads/iba-realestate/images/x.jpg → /uploads/images/x.jpg
+    if (p.startsWith(UPLOADS_BASE)) {
+        return '/uploads' + p.slice(UPLOADS_BASE.length);
+    }
+
+    // Already a correct web path
+    if (p.startsWith('/uploads/')) {
+        return p;
+    }
+
+    // Ensure leading slash as last resort
+    return p.startsWith('/') ? p : '/' + p;
+}
+
+/**
+ * normalizeImagePaths()
+ * Accepts a comma-separated string of paths (raw OS or web), returns a
+ * comma-separated string of clean web paths, filtered of empty entries.
+ * Call this ONLY when writing to the DB (on Multer f.path values).
+ * Do NOT call on values already read from the DB.
+ */
 function normalizeImagePaths(paths) {
     if (!paths) return '';
-    return paths.split(',')
-        .map(p => {
-            p = (p || '').trim();
-            if (!p) return '';
-            // Already a web URL or data URI — leave alone
-            if (p.startsWith('http://') || p.startsWith('https://') || p.startsWith('data:')) return p;
-            // Strip any absolute OS prefix, keep from "uploads/" onward
-            const uploadsIdx = p.indexOf('uploads/');
-            if (uploadsIdx !== -1) {
-                return '/' + p.slice(uploadsIdx);
-            }
-            // Fallback: ensure leading slash
-            return p.startsWith('/') ? p : '/' + p;
-        })
+    return paths
+        .split(',')
+        .map(p => normalizeToWebPath(p))
         .filter(Boolean)
         .join(',');
 }
 
-// ==================== NORMALIZE ROWS FOR RENDER ====================
-// Call this on any array of property rows before passing to res.render()
-// Ensures image_data and video paths are always web-accessible URLs,
-// regardless of how they were originally stored in the DB.
-function normalizePropertyRows(rows) {
-    if (!rows) return [];
-    return rows.map(row => ({
-        ...row,
-        image_data: normalizeImagePaths(row.image_data || ''),
-        video:      normalizeImagePaths(row.video      || '')
-    }));
+/**
+ * multerPathsToWeb()
+ * Converts an array of Multer file objects to a comma-separated web-path string.
+ * Always use this when saving Multer results to the DB.
+ */
+function multerPathsToWeb(fileArray) {
+    if (!fileArray || fileArray.length === 0) return '';
+    return fileArray.map(f => normalizeToWebPath(f.path)).filter(Boolean).join(',');
 }
 
 // ==================== MULTER CONFIG ====================
-// IMPORTANT: Use __dirname-based absolute paths so Multer saves to the correct
-// directory on Hostinger, where process.cwd() !== __dirname.
-// UPLOADS_BASE — hardcoded to persist across Git auto-deploys on Hostinger.
-// This path is OUTSIDE the app folder so it is never wiped on redeploy.
-const UPLOADS_BASE = '/home/u166499615/uploads/iba-realestate';
-
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         let dir = UPLOADS_BASE;
@@ -168,7 +189,7 @@ const transporter = nodemailer.createTransport({
 
 // ==================== DATABASE POOL ====================
 const db = mysql.createPool({
-    host:'srv2111.hstgr.io',
+    host: 'srv2111.hstgr.io',
     database: 'u166499615_realestate2',
     user: 'u166499615_ahmed2',
     password: 'Lateef.2008',
@@ -194,7 +215,6 @@ async function connectWithRetry(retries = 5, delayMs = 3000) {
     }
 }
 
-// Ensure chat_messages exists with the correct schema
 async function ensureChatTable() {
     try {
         await db.query(`
@@ -221,8 +241,6 @@ async function ensureChatTable() {
     }
 }
 
-
-
 // ==================== STATIC FILES ====================
 newapp2.set('views', path.join(__dirname, 'views'));
 newapp2.use('/img',      express.static(path.join(__dirname, 'public', 'img')));
@@ -231,7 +249,10 @@ newapp2.use('/plugins',  express.static(path.join(__dirname, 'public', 'plugins'
 newapp2.use('/dist',     express.static(path.join(__dirname, 'public', 'dist')));
 newapp2.use('/js',       express.static(path.join(__dirname, 'public', 'js')));
 newapp2.use('/data',     express.static(path.join(__dirname, 'public', 'data')));
-newapp2.use('/uploads',  express.static(UPLOADS_BASE));
+
+// FIX: Serve UPLOADS_BASE under /uploads with proper options.
+// maxAge caches images in the browser; fallthrough:false gives a clean 404 on missing files.
+newapp2.use('/uploads', express.static(UPLOADS_BASE, { maxAge: '7d', fallthrough: false }));
 
 newapp2.set('view engine', 'ejs');
 
@@ -273,7 +294,7 @@ newapp2.get('/api/check-login', (req, res) => {
 newapp2.get('/', async (req, res) => {
     try {
         const [card] = await db.query("SELECT * FROM all_properties LIMIT 3");
-        res.render('website', { card: normalizePropertyRows(card) });
+        res.render('website', { card });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server error');
@@ -283,7 +304,7 @@ newapp2.get('/', async (req, res) => {
 newapp2.get('/website', async (req, res) => {
     try {
         const [card] = await db.query("SELECT * FROM all_properties LIMIT 3");
-        res.render('website', { card: normalizePropertyRows(card) });
+        res.render('website', { card });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server error');
@@ -427,7 +448,7 @@ newapp2.post('/dashboard', async (req, res) => {
             req.session.isAgent = false;
             try {
                 const [card] = await db.query("SELECT * FROM all_properties LIMIT 3");
-                return res.render('website', { card: normalizePropertyRows(card) });
+                return res.render('website', { card });
             } catch (cardErr) {
                 console.error(cardErr.message);
                 return res.status(500).send('Server error');
@@ -452,7 +473,7 @@ newapp2.get('/index.html', ensureAuthenticated, async (req, res) => {
     const isAdmin = isAdminEmail(req.user.email);
     try {
         const [card] = await db.query("SELECT * FROM all_properties");
-        res.render('index', { card: normalizePropertyRows(card), isAdmin });
+        res.render('index', { card, isAdmin });
     } catch (err) { console.error(err.message); res.status(500).send('Server error'); }
 });
 
@@ -461,7 +482,7 @@ newapp2.get('/buy-page.html', ensureAuthenticated, async (req, res) => {
     const isAdmin = isAdminEmail(req.user.email);
     try {
         const [card] = await db.query("SELECT * FROM all_properties WHERE LOWER(rentSell) = 'sell'");
-        res.render('buy-page', { card: normalizePropertyRows(card), isAdmin });
+        res.render('buy-page', { card, isAdmin });
     } catch (err) { console.error(err.message); res.status(500).send('Server error'); }
 });
 
@@ -475,7 +496,7 @@ newapp2.get('/sell-page.html', ensureAuthenticated, async (req, res) => {
     const isAdmin = isAdminEmail(req.user.email);
     try {
         const [card] = await db.query("SELECT * FROM all_properties");
-        res.render('sell-page', { card: normalizePropertyRows(card), isAdmin });
+        res.render('sell-page', { card, isAdmin });
     } catch (err) { console.error(err.message); res.status(500).send('Server error'); }
 });
 
@@ -484,7 +505,7 @@ newapp2.get('/rent-page.html', ensureAuthenticated, async (req, res) => {
     const isAdmin = isAdminEmail(req.user.email);
     try {
         const [card] = await db.query("SELECT * FROM all_properties WHERE LOWER(rentSell) = 'rent'");
-        res.render('rent-page', { card: normalizePropertyRows(card), isAdmin });
+        res.render('rent-page', { card, isAdmin });
     } catch (err) { console.error(err.message); res.status(500).send('Server error'); }
 });
 
@@ -503,7 +524,7 @@ newapp2.get('/sales-approval.html', ensureAuthenticated, async (req, res) => {
     const isAdmin = isAdminEmail(req.user.email);
     try {
         const [card] = await db.query("SELECT * FROM sales_approval");
-        res.render('sales-approval', { card: normalizePropertyRows(card), isAdmin });
+        res.render('sales-approval', { card, isAdmin });
     } catch (err) { console.error(err.message); res.status(500).send('Server error'); }
 });
 
@@ -582,13 +603,17 @@ newapp2.get('/track-sales.html', ensureAuthenticated, async (req, res) => {
 newapp2.get('/register.html', (req, res) => res.render('signin-page'));
 
 // ==================== PROPERTY UPLOAD ====================
+// FIX: Use multerPathsToWeb() for ALL file fields — never raw f.path.
 newapp2.post('/upload', (req, res, next) => {
     upload.fields([
         { name: 'image',     maxCount: 10 },
         { name: 'video',     maxCount: 5  },
         { name: 'documents', maxCount: 10 }
     ])(req, res, (err) => {
-        if (err) { console.error('Multer error:', err.message); return res.status(400).json({ success: false, message: err.message }); }
+        if (err) {
+            console.error('Multer error:', err.message);
+            return res.status(400).json({ success: false, message: err.message });
+        }
         next();
     });
 }, async (req, res) => {
@@ -599,11 +624,14 @@ newapp2.post('/upload', (req, res, next) => {
         const [results] = await db.query('SELECT role FROM signin WHERE id = ?', [userId]);
         if (results.length === 0) return res.status(404).json({ success: false, message: 'User not found' });
 
-        const files         = req.files || {};
-        // normalizeImagePaths handles both relative and absolute OS paths from Multer
-        const imagePaths    = normalizeImagePaths(files.image     ? files.image.map(f => f.path).join(',')     : '');
-        const videoPaths    = normalizeImagePaths(files.video     ? files.video.map(f => f.path).join(',')     : '');
-        const documentPaths = files.documents   ? files.documents.map(f => f.path).join(',') : '';
+        const files = req.files || {};
+
+        // FIX: Use multerPathsToWeb() — converts OS paths to /uploads/... web paths before DB insert
+        const imagePaths    = multerPathsToWeb(files.image);
+        const videoPaths    = multerPathsToWeb(files.video);
+        const documentPaths = multerPathsToWeb(files.documents);
+
+        console.log('📸 Saving image paths to DB:', imagePaths);
 
         const {
             ownerName, ownerEmail, ownerPhone, propertyAddress,
@@ -674,7 +702,7 @@ newapp2.get('/sales-completed', async (req, res) => {
     const isAdmin = isAdminEmail(req.user.email);
     try {
         const [card] = await db.query("SELECT * FROM all_properties");
-        res.render('sell-page', { card: normalizePropertyRows(card), isAdmin });
+        res.render('sell-page', { card, isAdmin });
     } catch (err) { console.error(err.message); res.status(500).send('Server error'); }
 });
 
@@ -689,7 +717,7 @@ newapp2.get('/request-tour', ensureAuthenticated, async (req, res) => {
     try {
         const [card] = await db.query("SELECT * FROM all_properties WHERE id = ?", [propertyId]);
         if (card.length === 0) return res.status(404).send('No property found with that ID.');
-        res.render('request-tour', { property: normalizePropertyRows(card)[0], isAdmin, userId: req.user.id, userEmail: req.user.email });
+        res.render('request-tour', { property: card[0], isAdmin, userId: req.user.id, userEmail: req.user.email });
     } catch (err) { console.error(err.message); res.status(500).send('Server error'); }
 });
 
@@ -700,7 +728,7 @@ newapp2.get('/view', ensureAuthenticated, async (req, res) => {
     try {
         const [card] = await db.query("SELECT * FROM sales_approval WHERE id = ?", [propertyId]);
         if (card.length === 0) return res.status(404).send('No property found with that ID.');
-        res.render('request-tour', { property: normalizePropertyRows(card)[0], isAdmin, userId: req.user.id, userEmail: req.user.email });
+        res.render('request-tour', { property: card[0], isAdmin, userId: req.user.id, userEmail: req.user.email });
     } catch (err) { console.error(err.message); res.status(500).send('Server error'); }
 });
 
@@ -716,7 +744,7 @@ newapp2.get('/tour-submitted', ensureAuthenticated, async (req, res) => {
     const isAdmin = isAdminEmail(req.user.email);
     try {
         const [card] = await db.query("SELECT * FROM all_properties");
-        res.render('index', { card: normalizePropertyRows(card), isAdmin, userId: req.user.id, userEmail: req.user.email });
+        res.render('index', { card, isAdmin, userId: req.user.id, userEmail: req.user.email });
     } catch (err) { console.error(err.message); res.status(500).send('Server error'); }
 });
 
@@ -772,6 +800,8 @@ newapp2.post('/message', ensureAuthenticated, async (req, res) => {
 });
 
 // ==================== SALES APPROVAL / DECLINE ====================
+// FIX: Do NOT call normalizeImagePaths() on p.image_data — it is already a web path in the DB.
+// Only call normalizeImagePaths() on raw OS paths from Multer.
 newapp2.get('/approve', ensureAuthenticated, async (req, res) => {
     const propertyId = req.query.id;
     if (!propertyId) return res.status(400).send('Property ID is required.');
@@ -781,6 +811,11 @@ newapp2.get('/approve', ensureAuthenticated, async (req, res) => {
         if (results.length === 0) return res.status(404).send('No property found with that ID.');
 
         const p = results[0];
+
+        // FIX: p.image_data is already a web path (/uploads/...) — pass it through as-is.
+        // Only call normalizeImagePaths if you suspect legacy OS paths are stored.
+        const safeImageData = p.image_data || '';
+
         await db.query(
             `INSERT INTO all_properties
             (ownerName, ownerEmail, ownerPhone, propertyAddress, bedrooms, bathrooms, sqft,
@@ -791,7 +826,7 @@ newapp2.get('/approve', ensureAuthenticated, async (req, res) => {
                 p.ownerName, p.ownerEmail, p.ownerPhone, p.propertyAddress,
                 p.bedrooms, p.bathrooms, p.sqft,
                 p.land_size || null, p.building_size || null, p.num_flats || null,
-                normalizeImagePaths(p.image_data), p.video, p.documents || '',
+                safeImageData, p.video || '', p.documents || '',
                 p.description, p.title, p.rentSell, p.agentId, p.amount, p.property_type
             ]
         );
@@ -893,7 +928,7 @@ newapp2.get('/search', ensureAuthenticated, async (req, res) => {
     if (min_baths)  { sql += " AND bathrooms >= ?"; values.push(min_baths); }
     try {
         const [card] = await db.query(sql, values);
-        res.render('index', { card: normalizePropertyRows(card), isAdmin });
+        res.render('index', { card, isAdmin });
     } catch (err) { console.error(err.message); res.status(500).send('Server error'); }
 });
 
@@ -910,7 +945,7 @@ newapp2.get('/buy-search-form', ensureAuthenticated, async (req, res) => {
     if (min_baths && !isNaN(min_baths))  { query += " AND bathrooms >= ?"; queryParams.push(parseInt(min_baths)); }
     try {
         const [card] = await db.query(query, queryParams);
-        res.render('buy-page', { card: normalizePropertyRows(card), isAdmin });
+        res.render('buy-page', { card, isAdmin });
     } catch (err) { console.error(err.message); res.status(500).send('Server error'); }
 });
 
@@ -921,7 +956,7 @@ newapp2.get('/customer-buy-page.html', async (req, res) => {
     if (req.query.property_type && req.query.property_type !== 'all') { query += " AND `property-type` = ?"; params.push(req.query.property_type); }
     try {
         const [card] = await db.query(query, params);
-        res.render('customer-buy-page', { card: normalizePropertyRows(card) });
+        res.render('customer-buy-page', { card });
     } catch (err) { console.error(err.message); res.status(500).send('Server error.'); }
 });
 
@@ -931,7 +966,7 @@ newapp2.get('/costumer-sell-page.html', async (req, res) => {
     if (req.query.property_type && req.query.property_type !== 'all') { query += " AND `property-type` = ?"; params.push(req.query.property_type); }
     try {
         const [card] = await db.query(query, params);
-        res.render('costumer-sell-page', { card: normalizePropertyRows(card) });
+        res.render('costumer-sell-page', { card });
     } catch (err) { console.error(err.message); res.status(500).send('Server error.'); }
 });
 
@@ -941,7 +976,7 @@ newapp2.get('/customer-rent-page.html', async (req, res) => {
     if (req.query.property_type && req.query.property_type !== 'all') { query += " AND `property-type` = ?"; params.push(req.query.property_type); }
     try {
         const [card] = await db.query(query, params);
-        res.render('customer-rent-page', { card: normalizePropertyRows(card) });
+        res.render('customer-rent-page', { card });
     } catch (err) { console.error(err.message); res.status(500).send('Server error.'); }
 });
 
@@ -956,7 +991,7 @@ newapp2.get('/property-detail', ensureAuthenticated, async (req, res) => {
         let [propResults] = await db.query("SELECT * FROM all_properties WHERE id = ?", [propertyId]);
         if (propResults.length === 0) [propResults] = await db.query("SELECT * FROM sold_properties WHERE id = ?", [propertyId]);
         if (propResults.length === 0) return res.status(404).send('No property found with that ID.');
-        const property = normalizePropertyRows(propResults)[0];
+        const property = propResults[0];
         let agent = null;
         if (property.agentId) {
             const [agentResults] = await db.query("SELECT * FROM signin WHERE id = ? AND role = 'agent'", [property.agentId]);
@@ -1080,6 +1115,7 @@ newapp2.get('/sold', ensureAuthenticated, async (req, res) => {
         const [results] = await db.query('SELECT * FROM all_properties WHERE id = ?', [propertyId]);
         if (results.length === 0) return res.redirect('/sell-page.html?error=Property not found.');
         const p = results[0];
+        // FIX: p.image_data already contains /uploads/... web paths — pass through as-is
         await db.query(
             `INSERT INTO sold_properties
             (ownerName, ownerEmail, ownerPhone, propertyAddress, bedrooms, bathrooms, description,
@@ -1091,7 +1127,7 @@ newapp2.get('/sold', ensureAuthenticated, async (req, res) => {
                 p.propertyAddress || '', p.bedrooms || null, p.bathrooms || null,
                 p.description || '', p.sqft || null,
                 p.land_size || null, p.building_size || null, p.num_flats || null,
-                normalizeImagePaths(p.image_data), p.video, p.documents || '',
+                p.image_data || '', p.video || '', p.documents || '',
                 p.amount || null, p.title || null, p.rentSell || null,
                 p.agentId, p['property-type'] || null
             ]
@@ -1104,7 +1140,7 @@ newapp2.get('/sold', ensureAuthenticated, async (req, res) => {
 newapp2.get('/sold-properties', ensureAuthenticated, async (req, res) => {
     try {
         const [results] = await db.query('SELECT * FROM sold_properties ORDER BY id DESC');
-        res.render('sold-properties', { soldProperties: normalizePropertyRows(results), isAdmin: true });
+        res.render('sold-properties', { soldProperties: results, isAdmin: true });
     } catch (err) { console.error(err); res.redirect('/sold-properties?error=Failed to load sold properties.'); }
 });
 
@@ -1114,7 +1150,7 @@ newapp2.get('/edit-sold', ensureAuthenticated, async (req, res) => {
     try {
         const [results] = await db.query('SELECT * FROM sold_properties WHERE id = ?', [propertyId]);
         if (results.length === 0) return res.redirect('/sold-properties?error=Property not found.');
-        res.render('edit-sold', { property: normalizePropertyRows(results)[0], isAdmin: true });
+        res.render('edit-sold', { property: results[0], isAdmin: true });
     } catch (err) { console.error(err); res.redirect('/login'); }
 });
 
@@ -1147,21 +1183,20 @@ newapp2.post('/update-sold', ensureAuthenticated, (req, res, next) => {
         property_type:   req.body['property-type'] || null
     };
 
+    // FIX: kept paths are already web paths — only normalize NEW Multer file paths
     const keepImages = req.body.keep_images
         ? req.body.keep_images.split(',').map(s => s.trim()).filter(Boolean)
         : [];
-    const newImages = (req.files && req.files.image)
-        ? req.files.image.map(f => normalizeImagePaths(f.path))
-        : [];
-    const allImages = [...keepImages, ...newImages].join(',');
+    const newImages = multerPathsToWeb(req.files && req.files.image ? req.files.image : [])
+        .split(',').filter(Boolean);
+    const allImages = [...keepImages, ...newImages].filter(Boolean).join(',');
 
     const keepVideos = req.body.keep_videos
         ? req.body.keep_videos.split(',').map(s => s.trim()).filter(Boolean)
         : [];
-    const newVideos = (req.files && req.files.video)
-        ? req.files.video.map(f => normalizeImagePaths(f.path))
-        : [];
-    const allVideos = [...keepVideos, ...newVideos].join(',');
+    const newVideos = multerPathsToWeb(req.files && req.files.video ? req.files.video : [])
+        .split(',').filter(Boolean);
+    const allVideos = [...keepVideos, ...newVideos].filter(Boolean).join(',');
 
     try {
         await db.query(
@@ -1191,6 +1226,7 @@ newapp2.post('/unsold', ensureAuthenticated, async (req, res) => {
         const [results] = await db.query('SELECT * FROM sold_properties WHERE id = ?', [propertyId]);
         if (results.length === 0) return res.redirect('/sold-properties?error=Property not found.');
         const p = results[0];
+        // FIX: image_data already web path — pass through as-is
         await db.query(
             `INSERT INTO all_properties
             (ownerName, ownerEmail, ownerPhone, propertyAddress, bedrooms, bathrooms, description,
@@ -1202,7 +1238,7 @@ newapp2.post('/unsold', ensureAuthenticated, async (req, res) => {
                 p.propertyAddress || '', p.bedrooms || null, p.bathrooms || null,
                 p.description || '', p.sqft || null,
                 p.land_size || null, p.building_size || null, p.num_flats || null,
-                normalizeImagePaths(p.image_data), p.video, p.documents || '',
+                p.image_data || '', p.video || '', p.documents || '',
                 p.amount || null, p.title || null, p.rentSell || null,
                 p['property-type'] || null, p.agentId
             ]
@@ -1295,6 +1331,7 @@ newapp2.post('/properties/approve/:id', ensureAuthenticated, async (req, res) =>
         const [results] = await db.query('SELECT * FROM sales_approval WHERE id = ?', [id]);
         if (results.length === 0) return res.status(404).send('Property not found');
         const p = results[0];
+        // FIX: p.image_data already web path — no re-normalization needed
         await db.query(
             `INSERT INTO all_properties
             (ownerName, ownerEmail, ownerPhone, propertyAddress, bedrooms, bathrooms, description,
@@ -1303,8 +1340,8 @@ newapp2.post('/properties/approve/:id', ensureAuthenticated, async (req, res) =>
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved')`,
             [p.ownerName, p.ownerEmail, p.ownerPhone, p.propertyAddress, p.bedrooms || null, p.bathrooms || null,
              p.description, p.sqft || null, p.land_size || null, p.building_size || null, p.num_flats || null,
-             normalizeImagePaths(p.image_data), p.video, p.documents || '', p.amount, p.title, p.rentSell,
-             p.property_type, p.agentId]
+             p.image_data || '', p.video || '', p.documents || '',
+             p.amount, p.title, p.rentSell, p.property_type, p.agentId]
         );
         await db.query('DELETE FROM sales_approval WHERE id = ?', [id]);
         res.send('Property approved');
@@ -1317,6 +1354,7 @@ newapp2.post('/properties/sell/:id', ensureAuthenticated, async (req, res) => {
         const [results] = await db.query('SELECT * FROM all_properties WHERE id = ?', [id]);
         if (results.length === 0) return res.status(404).send('Property not found');
         const p = results[0];
+        // FIX: p.image_data already web path — no re-normalization needed
         await db.query(
             `INSERT INTO sold_properties
             (ownerName, ownerEmail, ownerPhone, propertyAddress, bedrooms, bathrooms, description,
@@ -1325,8 +1363,8 @@ newapp2.post('/properties/sell/:id', ensureAuthenticated, async (req, res) => {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sold')`,
             [p.ownerName, p.ownerEmail, p.ownerPhone, p.propertyAddress, p.bedrooms || null, p.bathrooms || null,
              p.description, p.sqft || null, p.land_size || null, p.building_size || null, p.num_flats || null,
-             normalizeImagePaths(p.image_data), p.video, p.documents || '', p.amount, p.title, p.rentSell,
-             p['property-type'], p.agentId]
+             p.image_data || '', p.video || '', p.documents || '',
+             p.amount, p.title, p.rentSell, p['property-type'], p.agentId]
         );
         await db.query('DELETE FROM all_properties WHERE id = ?', [id]);
         res.send('Property marked as sold');
@@ -1437,9 +1475,8 @@ newapp2.get('/edit-property/:id', ensureAuthenticated, async (req, res) => {
                 db.query(`SELECT *, 'sold' AS tableName FROM sold_properties WHERE id = ? AND agentId = ?`, [propertyId, agentId])
             ]);
         }
-        const allRows = [...pending, ...approved, ...sold];
-        if (allRows.length === 0) return res.status(404).json({ error: 'Property not found' });
-        const property = normalizePropertyRows(allRows)[0];
+        const property = [...pending, ...approved, ...sold][0];
+        if (!property) return res.status(404).json({ error: 'Property not found' });
         res.json(property);
     } catch (err) { console.error(err); res.status(500).json({ error: 'Database error' }); }
 });
@@ -1482,19 +1519,20 @@ newapp2.post('/update-property/:id', ensureAuthenticated, (req, res, next) => {
         else if (tableName === 'approved') { table = 'all_properties';  propertyTypeColumn = '`property-type`'; }
         else                               { table = 'sold_properties'; propertyTypeColumn = '`property-type`'; }
 
+        // FIX: kept paths are already web paths; only normalize new Multer OS paths
         const existingImages = keep_images
             ? keep_images.split(',').map(s => s.trim()).filter(Boolean)
             : [];
-        const newImageFiles = (req.files && req.files.image) || [];
-        const newImagePaths = newImageFiles.map(f => normalizeImagePaths(f.path));
-        const allImages = [...existingImages, ...newImagePaths].join(',');
+        const newImagePaths = multerPathsToWeb(req.files && req.files.image ? req.files.image : [])
+            .split(',').filter(Boolean);
+        const allImages = [...existingImages, ...newImagePaths].filter(Boolean).join(',');
 
         const existingVideos = keep_videos
             ? keep_videos.split(',').map(s => s.trim()).filter(Boolean)
             : [];
-        const newVideoFiles = (req.files && req.files.video) || [];
-        const newVideoPaths = newVideoFiles.map(f => normalizeImagePaths(f.path));
-        const allVideos = [...existingVideos, ...newVideoPaths].join(',');
+        const newVideoPaths = multerPathsToWeb(req.files && req.files.video ? req.files.video : [])
+            .split(',').filter(Boolean);
+        const allVideos = [...existingVideos, ...newVideoPaths].filter(Boolean).join(',');
 
         const whereClause = userIsAdmin ? `WHERE id = ?` : `WHERE id = ? AND agentId = ?`;
         const whereParams = userIsAdmin ? [propertyId] : [propertyId, agentId];
@@ -1678,7 +1716,6 @@ newapp2.post('/agent-chat/send', ensureAuthenticated, async (req, res) => {
         res.json({ success: true, messageId: result.insertId });
     } catch (err) { console.error(err); res.status(500).json({ error: 'Error saving message' }); }
 });
-
 
 // ==================== ADMIN CHAT ROUTES ====================
 newapp2.get('/admin-chat', ensureAuthenticated, async (req, res) => {
@@ -1886,7 +1923,6 @@ newapp2.post('/valuate', ensureAuthenticated, async (req, res) => {
 // ==================== REQUEST PROPERTY EVALUATION ====================
 newapp2.post('/request-evaluation', async (req, res) => {
     const b = req.body;
-
     const name            = b.name            || b.val_name    || '';
     const phone           = b.phone           || b.val_phone   || '';
     const email           = b.email           || b.val_email   || '';
@@ -2014,19 +2050,8 @@ newapp2.get('/request-evaluation', (req, res) => {
 newapp2.get('/gallery', async (req, res) => {
     try {
         const [card] = await db.query("SELECT * FROM all_properties ORDER BY id DESC");
-        res.render('gallery', { card: normalizePropertyRows(card) });
+        res.render('gallery', { card });
     } catch (err) { console.error(err); res.status(500).send('Server error'); }
-});
-
-// ==================== 404 HANDLER ====================
-newapp2.use((req, res) => {
-    res.status(404).send('Page not found');
-});
-
-// ==================== GLOBAL ERROR HANDLER ====================
-newapp2.use((err, req, res, next) => {
-    console.error('Unhandled error:', err);
-    res.status(500).send('Internal server error');
 });
 
 // ==================== START SERVER ====================
